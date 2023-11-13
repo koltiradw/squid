@@ -24,6 +24,8 @@
 #include <getopt.h>
 #endif
 
+#include <openssl/engine.h>
+
 /**
  \defgroup ssl_crtd security_file_certgen
  \ingroup ExternalPrograms
@@ -51,6 +53,7 @@ usage: security_file_certgen -hv -s directory -M size -b fs_block_size
     -b fs_block_size     File system block size in bytes. Need for processing
                          natural size of certificate on disk. Default value is
                          2048 bytes.
+    -e ssl_engine	 Add new ssl engine.
 
     After running write requests in the next format:
     <request code><whitespace><body_len><whitespace><body>
@@ -148,6 +151,7 @@ static void usage()
         "\t-b fs_block_size     File system block size in bytes. Need for processing\n"
         "\t                     natural size of certificate on disk. Default value is\n"
         "\t                     2048 bytes.\n"
+	"\t-e ssl_engine	Add new ssl engine.\n"
         "\n"
         "After running write requests in the next format:\n"
         "<request code><whitespace><body_len><whitespace><body>\n"
@@ -244,9 +248,11 @@ int main(int argc, char *argv[])
         size_t fs_block_size = 0;
         int8_t c;
         bool create_new_db = false;
+	bool add_new_ssl_engine = false;
+	std::string ssl_engine;
         std::string db_path;
         // process options.
-        while ((c = getopt(argc, argv, "dchvs:M:b:")) != -1) {
+        while ((c = getopt(argc, argv, "dchvs:M:b:e:")) != -1) {
             switch (c) {
             case 'd':
                 debug_enabled = 1;
@@ -257,6 +263,10 @@ int main(int argc, char *argv[])
             case 's':
                 db_path = optarg;
                 break;
+	    case 'e':
+		add_new_ssl_engine = true;
+		ssl_engine = optarg;
+		break;
             case 'M':
                 // use of -M without -s is probably an admin mistake, so make it an error
                 if (db_path.empty()) {
@@ -313,6 +323,17 @@ int main(int argc, char *argv[])
 
         // Initialize SSL subsystem
         SQUID_OPENSSL_init_ssl();
+	if (add_new_ssl_engine) {
+		ENGINE_load_builtin_engines();
+		ENGINE *engine;
+		if (!(engine = ENGINE_by_id(ssl_engine.c_str())))
+			throw TextException(ToSBuf("Unable to find SSL engine: \"", ssl_engine.c_str(), "\"."), Here());
+		if (!ENGINE_set_default(engine, ENGINE_METHOD_ALL)) {
+			const auto ssl_error = ERR_get_error();
+			throw TextException(ToSBuf("Failed to initialise SSL engine: \"", Security::ErrorString(ssl_error), "\"."), Here());
+		}
+		OpenSSL_add_all_algorithms();
+	}
         // process request.
         for (;;) {
             char request[HELPER_INPUT_BUFFER];
